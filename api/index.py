@@ -59,9 +59,12 @@ async def handle_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_chat_action("typing")
         
         with psycopg.connect(DATABASE_URL) as conn:
+            # Сначала гарантируем, что таблица лимитов создана
+            from expenses import init_limits
+            init_limits(conn)
+            
             sync_zenmoney(conn)
             expenses = get_all_today_expenses(conn)
-            # Из expenses.py передаем True/False для флага is_monthly
             raw_message = format_expenses(conn, "📅 *РАСХОДЫ СЕГОДНЯ*", expenses, is_monthly=False)
             conn.commit()
             
@@ -76,6 +79,9 @@ async def handle_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_chat_action("typing")
             
         with psycopg.connect(DATABASE_URL) as conn:
+            from expenses import init_limits
+            init_limits(conn)
+            
             sync_zenmoney(conn)
             expenses = get_all_month_expenses(conn)
             raw_message = format_expenses(conn, "📊 *РАСХОДЫ ЗА ТЕКУЩИЙ МЕСЯЦ*", expenses, is_monthly=True)
@@ -97,9 +103,10 @@ async def handle_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка синхронизации:\n{error}")
 
 async def handle_limits_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Выводит текущие лимиты и Inline-кнопки для настройки."""
     try:
         with psycopg.connect(DATABASE_URL) as conn:
+            from expenses import init_limits
+            init_limits(conn)
             limits = get_all_limits(conn)
         
         lines = ["⚙️ *ТЕКУЩИЕ ЛИМИТЫ*", ""]
@@ -109,8 +116,6 @@ async def handle_limits_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
             daily = f"{data['daily']:.0f} грн" if data['daily'] else "не установлен"
             monthly = f"{data['monthly']:.0f} грн" if data['monthly'] else "не установлен"
             lines.append(f"• *{category}*:\n  День: {daily} | Месяц: {monthly}")
-            
-            # Кнопка для изменения конкретной категории
             keyboard.append([InlineKeyboardButton(f"Изменить {category}", callback_data=f"edit_lim:{category}")])
             
         lines.append("\n💡 Чтобы изменить, нажмите кнопку ниже или введите:\n`/setlimit [Категория] [День] [Месяц]`")
@@ -124,7 +129,6 @@ async def handle_limits_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(f"❌ Ошибка:\n{error}")
 
 async def set_limit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ручная установка лимитов через команду: /setlimit Продукты 500 15000"""
     try:
         args = context.args
         if len(args) < 3:
@@ -138,7 +142,6 @@ async def set_limit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         cat_name = args[0].capitalize()
-        # Позволяем писать "продукты", "Продукты"
         valid_categories = {"Алкоголь": "Алкоголь", "Кофе": "Кофе", "Продукты": "Продукты"}
         cat_name = valid_categories.get(cat_name)
 
@@ -149,11 +152,12 @@ async def set_limit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         daily = float(args[1])
         monthly = float(args[2])
         
-        # Если передан 0, превращаем его в None (удаление лимита)
         daily_val = None if daily <= 0 else daily
         monthly_val = None if monthly <= 0 else monthly
 
         with psycopg.connect(DATABASE_URL) as conn:
+            from expenses import init_limits
+            init_limits(conn)
             set_limit(conn, cat_name, daily_val, monthly_val)
             conn.commit()
 
