@@ -2,27 +2,26 @@ import os
 import json
 import asyncio
 import psycopg
-from dotenv import load_dotenv
+from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, CommandHandler
 
-# Импортируем обновленные под PostgreSQL функции
+# Импортируем ваши обновленные функции
 from sync import sync_zenmoney
 from expenses import get_all_today_expenses, get_all_month_expenses
 
-load_dotenv()
-
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-# ВАЖНО: Используйте Pooling URL из панели Neon (обычно заканчивается на sslmode=require или порт 5432)
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not TOKEN:
-    raise RuntimeError("TELEGRAM_BOT_TOKEN не указан в .env")
+    raise RuntimeError("TELEGRAM_BOT_TOKEN не указан в переменных окружения")
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL не указан в .env")
+    raise RuntimeError("DATABASE_URL не указан в переменных окружения")
 
-# 1. Инициализируем приложение Telegram БЕЗ запуска polling
-# Создаем глобальный объект, чтобы он переиспользовался между вызовами serverless-функции
+# Создаем Flask-приложение для Vercel
+app = Flask(__name__)
+
+# Инициализируем приложение Telegram БЕЗ запуска polling
 application = Application.builder().token(TOKEN).build()
 
 def format_expenses(title, expenses):
@@ -49,11 +48,10 @@ async def start(update: Update, context):
 
 async def today(update: Update, context):
     try:
-        # Открываем ОДНО соединение с Neon на время выполнения команды
         with psycopg.connect(DATABASE_URL) as conn:
             sync_zenmoney(conn)
             expenses = get_all_today_expenses(conn)
-            conn.commit()  # Фиксируем изменения после синхронизации
+            conn.commit()
 
         message = format_expenses("📅 РАСХОДЫ СЕГОДНЯ", expenses)
         await update.message.reply_text(message)
@@ -88,38 +86,35 @@ application.add_handler(CommandHandler("month", month))
 application.add_handler(CommandHandler("sync", sync_command))
 
 
-# =====================================================================
-# СЕРВЕРЛЕСС ТОЧКА ВХОДА (ХАНДЛЕР)
-# =====================================================================
-
 async def process_update(update_dict):
     """Асинхронная обработка апдейта через python-telegram-bot"""
-    update = Update.de_json(update_dict, application.bot)
-    # Инициализируем компоненты приложения, если это первый запуск инстанса
+    # Гарантируем инициализацию внутренней инфраструктуры PTB перед обработкой апдейта
     if not application.updater:
         await application.initialize()
+    
+    update = Update.de_json(update_dict, application.bot)
     await application.process_update(update)
 
-def handler(request):
-    """
-    Основная функция, которую вызывает Serverless-платформа.
-    Принимает объект запроса (зависит от вашей платформы, ниже пример для WSGI/Фреймворков)
-    """
-    # 1. Получаем JSON от Telegram Webhook
-    try:
-        if hasattr(request, "get_json"):
-            body = request.get_json()
-        elif hasattr(request, "body"):
-            body = json.loads(request.body)
-        else:
-            body = json.loads(request)
-    except Exception:
-        return {"statusCode": 400, "body": "Invalid JSON"}
 
-    # 2. Передаем апдейт в асинхронный цикл обработки Telegram
+# Настраиваем роутинг, на который Telegram шлет POST-запросы
+@app.route("/webhook", methods=["POST"])
+def webhook_handler():
     try:
-        asyncio.run(process_update(body))
-        return {"statusCode": 200, "body": "OK"}
+        body = request.get_json(force=True)
+        
+        # Создаем и устанавливаем изолированный цикл событий для текущего потока запроса
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        loop.run_until_complete(process_update(body))
+        loop.close()
+        
+        return jsonify({"status": "ok"}), 200
     except Exception as e:
         print(f"Ошибка при обработке вебхука: {e}")
-        return {"statusCode": 500, "body": str(e)}
+        return jsonify({"error": str(e)}), 500
+
+# Корневой URL для проверки доступности (GET-запрос)
+@app.route("/", methods=["GET"])
+def index():
+    return "Бот готов к работе 🚀", 200
