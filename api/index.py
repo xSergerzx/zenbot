@@ -1,10 +1,14 @@
 import os
 import asyncio
 import psycopg
+import sys
 from fastapi import FastAPI, Request, Response
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 import logging
+
+# Добавляем корневую директорию в путь поиска модулей, чтобы импортировать sync и expenses
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 # Настройка логирования
 logging.basicConfig(
@@ -75,6 +79,7 @@ bot_app.add_handler(CommandHandler("month", month))
 bot_app.add_handler(CommandHandler("sync", sync_command))
 
 @app.post("/")
+@app.post("/api/index")
 async def webhook_handler(request: Request):
     try:
         if not TOKEN:
@@ -93,6 +98,7 @@ async def webhook_handler(request: Request):
         return Response(content=str(e), status_code=500)
 
 @app.get("/")
+@app.get("/api/index")
 async def root():
     return {"status": "ok", "bot": "ZenMoney Bot"}
 
