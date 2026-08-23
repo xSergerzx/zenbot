@@ -115,7 +115,8 @@ async def handle_limits_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         for category, data in limits.items():
             daily = f"{data['daily']:.0f} грн" if data['daily'] else "не установлен"
             monthly = f"{data['monthly']:.0f} грн" if data['monthly'] else "не установлен"
-            lines.append(f"• *{category}*:\n  День: {daily} | Месяц: {monthly}")
+            # Заменяем | на \| для совместимости с MarkdownV2
+            lines.append(f"• *{category}*:\n  День: {daily} \| Месяц: {monthly}")
             keyboard.append([InlineKeyboardButton(f"Изменить {category}", callback_data=f"edit_lim:{category}")])
             
         lines.append("\n💡 Чтобы изменить, нажмите кнопку ниже или введите:\n`/setlimit [Категория] [День] [Месяц]`")
@@ -127,6 +128,7 @@ async def handle_limits_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as error:
         logger.error(f"Ошибка в меню лимитов: {error}")
         await update.message.reply_text(f"❌ Ошибка:\n{error}")
+
 
 async def set_limit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
