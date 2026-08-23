@@ -1,162 +1,114 @@
 import os
-import sqlite3
 import time
-
 import requests
-from dotenv import load_dotenv
+import psycopg
+from psycopg.rows import tuple_row
 
-
-load_dotenv()
 
 TOKEN = os.getenv("ZENMONEY_ACCESS_TOKEN")
-
 API_URL = "https://api.zenmoney.ru/v8/diff/"
-DB_PATH = "bot.db"
 
 
 if not TOKEN:
-    raise RuntimeError(
-        "ZENMONEY_ACCESS_TOKEN не указан в .env"
-    )
+    raise RuntimeError("ZENMONEY_ACCESS_TOKEN не указан в .env")
 
 
-def get_db():
-    return sqlite3.connect(DB_PATH)
-
-
-def init_db():
-    with get_db() as db:
-
-        db.execute("""
+def init_db(conn):
+    """Инициализация таблиц в PostgreSQL при необходимости."""
+    with conn.cursor() as cur:
+        # В PostgreSQL используем TEXT/VARCHAR, NUMERIC (или DOUBLE PRECISION) и BOOLEAN
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT
             )
         """)
 
-        db.execute("""
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 id TEXT PRIMARY KEY,
                 date TEXT NOT NULL,
-                outcome REAL DEFAULT 0,
+                outcome DOUBLE PRECISION DEFAULT 0,
                 tag_id TEXT,
                 source TEXT,
-                deleted INTEGER DEFAULT 0
+                deleted BOOLEAN DEFAULT FALSE
             )
         """)
-
-        # Если база была создана старой версией sync.py,
-        # добавляем source в существующую таблицу.
-        columns = db.execute(
-            "PRAGMA table_info(transactions)"
-        ).fetchall()
-
-        column_names = [column[1] for column in columns]
-
-        if "source" not in column_names:
-            db.execute(
-                "ALTER TABLE transactions ADD COLUMN source TEXT"
-            )
-
-        db.commit()
+        # Коммит делать не нужно, если соединение управляется контекстным менеджером выше
 
 
-def get_server_timestamp():
-    with get_db() as db:
-
-        row = db.execute("""
+def get_server_timestamp(conn):
+    """Получение временной метки из базы PostgreSQL."""
+    with conn.cursor() as cur:
+        cur.execute("""
             SELECT value
             FROM settings
             WHERE key = 'server_timestamp'
-        """).fetchone()
-
+        """)
+        row = cur.fetchone()
         if row is None:
             return 0
-
         return int(row[0])
 
 
-def save_server_timestamp(timestamp):
-    with get_db() as db:
-
-        db.execute("""
+def save_server_timestamp(conn, timestamp):
+    """Сохранение временной метки."""
+    with conn.cursor() as cur:
+        # В PostgreSQL используется синтаксис EXCLUDED (вместо excluded у SQLite)
+        cur.execute("""
             INSERT INTO settings (key, value)
-            VALUES ('server_timestamp', ?)
+            VALUES ('server_timestamp', %s)
             ON CONFLICT(key)
-            DO UPDATE SET value = excluded.value
+            DO UPDATE SET value = EXCLUDED.value
         """, (str(timestamp),))
 
-        db.commit()
 
+def sync_zenmoney(conn):
+    """
+    Основная функция синхронизации.
+    Принимает активное соединение `conn` от psycopg.
+    """
+    # Гарантируем наличие таблиц
+    init_db(conn)
 
-def sync():
-    server_timestamp = get_server_timestamp()
-
-    print(
-        f"Синхронизация. "
-        f"serverTimestamp = {server_timestamp}"
-    )
+    server_timestamp = get_server_timestamp(conn)
+    print(f"Синхронизация. serverTimestamp = {server_timestamp}")
 
     payload = {
         "currentClientTimestamp": int(time.time()),
         "serverTimestamp": server_timestamp,
     }
 
-    # Первая синхронизация — получаем полную историю.
     if server_timestamp == 0:
-        payload["forceFetch"] = [
-            "tag",
-            "transaction",
-            "user",
-        ]
+        payload["forceFetch"] = ["tag", "transaction", "user"]
 
     headers = {
         "Authorization": f"Bearer {TOKEN}",
         "Content-Type": "application/json",
     }
 
-    response = requests.post(
-        API_URL,
-        headers=headers,
-        json=payload,
-        timeout=30,
-    )
-
+    response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
     response.raise_for_status()
 
     data = response.json()
-
     transactions = data.get("transaction", [])
+    print(f"Получено транзакций: {len(transactions)}")
 
-    print(
-        f"Получено транзакций: {len(transactions)}"
-    )
-
-    with get_db() as db:
-
+    with conn.cursor() as cur:
         for transaction in transactions:
-
             transaction_id = transaction["id"]
-
             transaction_date = transaction.get("date")
-
             outcome = transaction.get("outcome") or 0
-
-            deleted = (
-                1
-                if transaction.get("deleted")
-                else 0
-            )
+            
+            # Важно: для PostgreSQL сразу делаем нативный Python bool (True/False)
+            deleted = bool(transaction.get("deleted"))
 
             tags = transaction.get("tag") or []
-
-            # Для наших расчётов сохраняем категорию.
             tag_id = tags[0] if tags else None
-
-            # Важно для split-транзакций.
             source = transaction.get("source")
 
-            db.execute("""
+            # Меняем плейсхолдеры '?' на '%s' и 'excluded' на 'EXCLUDED'
+            cur.execute("""
                 INSERT INTO transactions (
                     id,
                     date,
@@ -165,15 +117,14 @@ def sync():
                     source,
                     deleted
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
-
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT(id)
                 DO UPDATE SET
-                    date = excluded.date,
-                    outcome = excluded.outcome,
-                    tag_id = excluded.tag_id,
-                    source = excluded.source,
-                    deleted = excluded.deleted
+                    date = EXCLUDED.date,
+                    outcome = EXCLUDED.outcome,
+                    tag_id = EXCLUDED.tag_id,
+                    source = EXCLUDED.source,
+                    deleted = EXCLUDED.deleted
             """, (
                 transaction_id,
                 transaction_date,
@@ -183,20 +134,25 @@ def sync():
                 deleted,
             ))
 
-        db.commit()
-
     new_timestamp = data.get("serverTimestamp")
-
     if new_timestamp:
-        save_server_timestamp(new_timestamp)
+        save_server_timestamp(conn, new_timestamp)
 
-    print(
-        f"Новый serverTimestamp: {new_timestamp}"
-    )
-
+    print(f"Новый serverTimestamp: {new_timestamp}")
     print("Синхронизация завершена.")
 
 
+# ДЛЯ ЛОКАЛЬНОГО ТЕСТИРОВАНИЯ:
 if __name__ == "__main__":
-    init_db()
-    sync()
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("DATABASE_URL не указан в .env")
+        
+    print("Локальный запуск синхронизации с Neon...")
+    with psycopg.connect(db_url) as conn:
+        sync_zenmoney(conn)
+        conn.commit()
+    print("Готово.")
