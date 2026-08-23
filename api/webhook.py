@@ -1,8 +1,7 @@
 import os
 import json
-import asyncio
 import psycopg
-from http.server import BaseHTTPRequestHandler
+from fastapi import FastAPI, Request, Response
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -16,8 +15,8 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not TOKEN or not DATABASE_URL:
     raise RuntimeError("Проверьте переменные окружения TELEGRAM_BOT_TOKEN и DATABASE_URL")
 
-# Инициализируем базовое приложение Telegram
-application = Application.builder().token(TOKEN).build()
+# Инициализируем приложение Telegram (переименовали в bot_app, чтобы не путать с ASGI-приложением)
+bot_app = Application.builder().token(TOKEN).build()
 
 def format_expenses(title, expenses):
     lines = [title, ""]
@@ -67,49 +66,36 @@ async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as error:
         await update.message.reply_text(f"❌ Ошибка синхронизации:\n{error}")
 
-# Регистрируем команды
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("today", today))
-application.add_handler(CommandHandler("month", month))
-application.add_handler(CommandHandler("sync", sync_command))
+# Регистрируем команды в боте
+bot_app.add_handler(CommandHandler("start", start))
+bot_app.add_handler(CommandHandler("today", today))
+bot_app.add_handler(CommandHandler("month", month))
+bot_app.add_handler(CommandHandler("sync", sync_command))
 
-async def process_update(update_dict):
-    if not application.updater:
-        await application.initialize()
-    update = Update.de_json(update_dict, application.bot)
-    await application.process_update(update)
+# 🚀 Создаем легитимное ASGI-приложение, которое ищет сервер (api.webhook:application)
+application = FastAPI()
 
-# Класс-обработчик запросов, который Vercel понимает нативно из коробки
-class handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        # Корневой URL или проверка доступности в браузере
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain; charset=utf-8')
-        self.end_headers()
-        self.wfile.write("Бот готов к работе 🚀".encode('utf-8'))
-        return
+@application.on_event("startup")
+async def startup_event():
+    # Инициализируем внутренние компоненты Telegram-бота при запуске сервера
+    await bot_app.initialize()
 
-    def do_POST(self):
-        # Обработка вебхука Telegram
-        try:
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            body = json.loads(post_data.decode('utf-8'))
-            
-            # Асинхронный запуск обработки
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(process_update(body))
-            loop.close()
-            
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "ok"}).encode('utf-8'))
-        except Exception as e:
-            print(f"Ошибка в do_POST: {e}")
-            self.send_response(500)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
-        return
+@application.get("/")
+async def root():
+    # Проверка доступности в браузере (GET-запрос)
+    return Response(content="Бот готов к работе 🚀", media_type="text/plain")
+
+@application.post("/")
+async def telegram_webhook(request: Request):
+    # Обработка входящих вебхуков от Telegram (POST-запрос)
+    try:
+        body = await request.json()
+        update = Update.de_json(body, bot_app.bot)
+        
+        # Передаем обновление в бот (работает в нативном асинхронном цикле FastAPI)
+        await bot_app.process_update(update)
+        
+        return {"status": "ok"}
+    except Exception as e:
+        print(f"Ошибка в вебхуке: {e}")
+        return Response(content=json.dumps({"error": str(e)}), status_code=500, media_type="application/json")
