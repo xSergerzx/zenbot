@@ -9,10 +9,6 @@ TOKEN = os.getenv("ZENMONEY_ACCESS_TOKEN")
 API_URL = "https://api.zenmoney.ru/v8/diff/"
 
 
-if not TOKEN:
-    raise RuntimeError("ZENMONEY_ACCESS_TOKEN не указан в .env")
-
-
 def init_db(conn):
     """Инициализация таблиц в PostgreSQL при необходимости."""
     with conn.cursor() as cur:
@@ -69,6 +65,10 @@ def sync_zenmoney(conn):
     Принимает активное соединение `conn` от psycopg.
     """
     # Гарантируем наличие таблиц
+    if not TOKEN:
+        raise RuntimeError("ZENMONEY_ACCESS_TOKEN не указан в окружении")
+
+
     init_db(conn)
 
     server_timestamp = get_server_timestamp(conn)

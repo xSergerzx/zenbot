@@ -1,5 +1,5 @@
 import os
-
+import psycopg
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
@@ -8,50 +8,28 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from sync import sync
+from sync import sync_zenmoney
 from expenses import (
     get_all_today_expenses,
     get_all_month_expenses,
+    format_expenses,
 )
-
 
 load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not TOKEN:
     raise RuntimeError(
         "TELEGRAM_BOT_TOKEN не указан в .env"
     )
 
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL не указан в .env"
+    )
 
-def format_expenses(title, expenses):
-    lines = [title, ""]
-
-    emojis = {
-        "Алкоголь": "🍺",
-        "Кофе": "☕",
-        "Продукты": "🛒",
-    }
-
-    total = 0
-
-    for category, amount in expenses.items():
-        total += amount
-
-        emoji = emojis.get(category, "💰")
-
-        lines.append(
-            f"{emoji} {category}: {amount:.2f} грн"
-        )
-
-    lines.extend([
-        "",
-        "────────────────",
-        f"💰 Итого: {total:.2f} грн",
-    ])
-
-    return "\n".join(lines)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -66,9 +44,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        sync()
-
-        expenses = get_all_today_expenses()
+        with psycopg.connect(DATABASE_URL) as conn:
+            sync_zenmoney(conn)
+            expenses = get_all_today_expenses(conn)
+            conn.commit()
 
         message = format_expenses(
             "📅 РАСХОДЫ СЕГОДНЯ",
@@ -85,9 +64,10 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def month(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        sync()
-
-        expenses = get_all_month_expenses()
+        with psycopg.connect(DATABASE_URL) as conn:
+            sync_zenmoney(conn)
+            expenses = get_all_month_expenses(conn)
+            conn.commit()
 
         message = format_expenses(
             "📊 РАСХОДЫ ЗА ТЕКУЩИЙ МЕСЯЦ",
@@ -107,7 +87,9 @@ async def sync_command(
     context: ContextTypes.DEFAULT_TYPE,
 ):
     try:
-        sync()
+        with psycopg.connect(DATABASE_URL) as conn:
+            sync_zenmoney(conn)
+            conn.commit()
 
         await update.message.reply_text(
             "✅ ZenMoney синхронизирован."
@@ -142,7 +124,7 @@ def main():
         CommandHandler("sync", sync_command)
     )
 
-    print("Telegram-бот запущен.")
+    print("Telegram-бот запущен (polling).")
 
     application.run_polling()
 

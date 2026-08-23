@@ -13,6 +13,36 @@ CATEGORIES = {
 }
 
 
+
+def format_expenses(title, expenses):
+    """Форматирует словарь расходов в красивое сообщение."""
+    lines = [title, ""]
+
+    emojis = {
+        "Алкоголь": "🍺",
+        "Кофе": "☕",
+        "Продукты": "🛒",
+    }
+
+    total = 0
+
+    for category, amount in expenses.items():
+        total += amount
+
+        emoji = emojis.get(category, "💰")
+
+        lines.append(
+            f"{emoji} {category}: {amount:.2f} грн"
+        )
+
+    lines.extend([
+        "",
+        "────────────────",
+        f"💰 Итого: {total:.2f} грн",
+    ])
+
+    return "\n".join(lines)
+
 def init_limits(conn):
     """Инициализация таблицы лимитов в PostgreSQL."""
     with conn.cursor() as cur:
@@ -89,7 +119,7 @@ def get_category_expenses(conn, category_name, start_date=None, end_date=None):
     tag_id = CATEGORIES.get(category_name)
 
     if not tag_id:
-        raise ValueError(f"Неизвестная категория: {category_name}")
+        return 0  # Если тэг не настроен, возвращаем 0
 
     # В PostgreSQL колонка deleted имеет тип boolean, поэтому пишем `deleted = FALSE`
     query = """
