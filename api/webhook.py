@@ -73,26 +73,23 @@ bot_app.add_handler(CommandHandler("month", month))
 bot_app.add_handler(CommandHandler("sync", sync_command))
 
 async def process_update(update_dict):
-    # Инициализируем бота внутри текущего event loop
-    await bot_app.initialize()
+    # Инициализация и обработка внутри изолированного потока вызова
+    if not bot_app.updater:
+        await bot_app.initialize()
+    
     update = Update.de_json(update_dict, bot_app.bot)
     await bot_app.process_update(update)
-    # Корректно завершаем сессию бота, чтобы избежать утечек памяти в Serverless
-    await bot_app.shutdown()
 
-# Стандартный WSGI-интерфейс, который Vercel определит автоматически
+# Стандартный WSGI-интерфейс, который Vercel подхватывает автоматически
 def application(environ, start_response):
     request_method = environ.get('REQUEST_METHOD', 'GET')
     
     if request_method == 'GET':
-        status = '200 OK'
-        response_headers = [('Content-type', 'text/plain; charset=utf-8')]
-        start_response(status, response_headers)
-        return [b"Bot is running... \xd1\x84\xd4\xbb"] # "Бот готов к работе 🚀" в кодировке или просто текст
+        start_response('200 OK', [('Content-type', 'text/plain; charset=utf-8')])
+        return ["Бот готов к работе 🚀".encode('utf-8')]
         
     elif request_method == 'POST':
         try:
-            # Читаем тело POST-запроса от Telegram
             try:
                 request_body_size = int(environ.get('CONTENT_LENGTH', 0))
             except ValueError:
@@ -101,21 +98,20 @@ def application(environ, start_response):
             request_body = environ['wsgi.input'].read(request_body_size)
             body = json.loads(request_body.decode('utf-8'))
             
-            # Запускаем асинхронную обработку в чистом изолированном loop для этого вызова функции
-            asyncio.run(process_update(body))
+            # Нативная изоляция асинхронного Event Loop под Serverless рантайм
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(process_update(body))
+            finally:
+                loop.close()
             
-            status = '200 OK'
-            response_headers = [('Content-type', 'application/json')]
-            start_response(status, response_headers)
+            start_response('200 OK', [('Content-type', 'application/json')])
             return [json.dumps({"status": "ok"}).encode('utf-8')]
             
         except Exception as e:
-            status = '500 Internal Server Error'
-            response_headers = [('Content-type', 'application/json')]
-            start_response(status, response_headers)
+            start_response('500 Internal Server Error', [('Content-type', 'application/json')])
             return [json.dumps({"error": str(e)}).encode('utf-8')]
             
-    status = '405 Method Not Allowed'
-    response_headers = [('Content-type', 'text/plain')]
-    start_response(status, response_headers)
+    start_response('405 Method Not Allowed', [('Content-type', 'text/plain')])
     return [b"Method Not Allowed"]
