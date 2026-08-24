@@ -30,8 +30,36 @@ from expenses import (
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# Парсим список разрешенных ID (преобразуем строки в числа)
+ALLOWED_IDS_RAW = os.getenv("ALLOWED_TELEGRAM_IDS", "")
+ALLOWED_TELEGRAM_IDS = [int(x.strip()) for x in ALLOWED_IDS_RAW.split(",") if x.strip().isdigit()]
+
 app = FastAPI()
 bot_app = Application.builder().token(TOKEN).build()
+
+
+def is_authorized(update: Update) -> bool:
+    """Проверяет, разрешено ли пользователю взаимодействовать с ботом."""
+    if not ALLOWED_TELEGRAM_IDS:
+        # Если список пуст в .env, разрешаем доступ (или можно заблокировать)
+        return True
+    
+    user = update.effective_user
+    return user is not None and user.id in ALLOWED_TELEGRAM_IDS
+
+
+async def notify_unauthorized(update: Update):
+    """Отправляет сообщение об отказе в доступе."""
+    user = update.effective_user
+    user_id = user.id if user else "Unknown"
+    logger.warning(f"Несанкционированный доступ от ID: {user_id}")
+    
+    text = "⛔ *Доступ ограничен*\nВаш Telegram ID не внесен в список разрешенных пользователей\\."
+    
+    if update.message:
+        await update.message.reply_text(text, parse_mode="MarkdownV2")
+    elif update.callback_query:
+        await update.callback_query.answer("⛔ Доступ запрещен", show_alert=True)
 
 
 def get_main_keyboard():
@@ -46,19 +74,23 @@ def get_main_keyboard():
 
 def fix_markdown(text: str) -> str:
     """Экранирует системные символы для MarkdownV2, не ломая разметку (* и [])."""
-    bad_chars = ['_', '-', '.', '!', '(', ')', '{', '}', '+', '#']
+    bad_chars = ['_', '-', '.', '!', '(', ')', '{', '}', '+', '#', '|']
     for char in bad_chars:
         text = text.replace(char, f"\\{char}")
     return text
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return await notify_unauthorized(update)
+
     await update.message.reply_text(
         "Привет\\! 👋\n\nЯ помогу контролировать расходы из ZenMoney\\.\n\n"
         "Используй кнопки меню или команды:\n"
         "• `/today` — расходы за сегодня\n"
-        "• `/month` — расходы за месяц\n"
+        "• `/month` — расходы за текущий месяц\n"
         "• `/balance` — баланс карты\n"
+        "• `/sync` — принудительная синхронизация\n"
         "• `/setlimit [Категория] [День] [Месяц]` — установить лимиты",
         reply_markup=get_main_keyboard(),
         parse_mode="MarkdownV2"
@@ -66,6 +98,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return await notify_unauthorized(update)
+
     try:
         if update.message:
             await update.message.reply_chat_action("typing")
@@ -88,6 +123,9 @@ async def handle_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return await notify_unauthorized(update)
+
     try:
         if update.message:
             await update.message.reply_chat_action("typing")
@@ -108,7 +146,11 @@ async def handle_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка в month: {error}")
         await update.message.reply_text(f"❌ Ошибка:\n{error}")
 
+
 async def handle_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return await notify_unauthorized(update)
+
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             sync_zenmoney(conn)
@@ -120,6 +162,9 @@ async def handle_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return await notify_unauthorized(update)
+
     try:
         if update.message:
             await update.message.reply_chat_action("typing")
@@ -142,6 +187,9 @@ async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_limits_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return await notify_unauthorized(update)
+
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             init_limits(conn)
@@ -168,6 +216,9 @@ async def handle_limits_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def set_limit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return await notify_unauthorized(update)
+
     try:
         args = context.args
         if len(args) < 3:
@@ -207,6 +258,9 @@ async def set_limit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return await notify_unauthorized(update)
+
     query = update.callback_query
     await query.answer()
     
@@ -221,6 +275,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return await notify_unauthorized(update)
+
     text = update.message.text
     if text == "📅 Сегодня":
         await handle_today(update, context)
@@ -256,7 +313,6 @@ async def webhook_handler(request: Request):
         data = await request.json()
         update = Update.de_json(data, bot_app.bot)
         
-        # Исправлено для стабильной работы на Vercel Serverless
         if not bot_app._initialized:
             await bot_app.initialize()
             
