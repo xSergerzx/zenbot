@@ -30,7 +30,8 @@ def get_main_keyboard():
     """Возвращает постоянную клавиатуру главного меню."""
     keyboard = [
         ["📅 Сегодня", "📊 Месяц"],
-        ["🔄 Синхронизация", "⚙️ Лимиты"]
+        ["💳 Баланс", "⚙️ Лимиты"]
+        ["🔄 Синхронизация"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -101,6 +102,37 @@ async def handle_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as error:
         logger.error(f"Ошибка при синхронизации: {error}")
         await update.message.reply_text(f"❌ Ошибка синхронизации:\n{error}")
+
+async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.message:
+            await update.message.reply_chat_action("typing")
+
+        with psycopg.connect(DATABASE_URL) as conn:
+            # Синхронизируемся с ZenMoney
+            sync_zenmoney(conn)
+            
+            # Вкажите название нужной карты как в ZenMoney
+            CARD_NAME = "Монобанк"  
+            card_data = get_card_balance(conn, CARD_NAME)
+            conn.commit()
+
+        if card_data:
+            # Форматируем красивое число (например: 12 450.00 грн)
+            formatted_sum = f"{card_data['balance']:,.2f}".replace(",", " ").replace(".", ",")
+            raw_message = (
+                f"💳 *БАЛАНС КАРТЫ*\n\n"
+                f"Карта: *{card_data['title']}*\n"
+                f"Остаток: *{formatted_sum} {card_data['currency']}*"
+            )
+        else:
+            raw_message = f"❌ Карта с названием *{CARD_NAME}* не найдена\."
+
+        await update.message.reply_text(fix_markdown(raw_message), parse_mode="MarkdownV2")
+
+    except Exception as error:
+        logger.error(f"Ошибка при вычислении баланса: {error}")
+        await update.message.reply_text(f"❌ Ошибка при получении баланса:\n{error}")
 
 async def handle_limits_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -194,6 +226,8 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await handle_sync(update, context)
     elif text == "⚙️ Лимиты":
         await handle_limits_menu(update, context)
+    elif text == "💳 Баланс":
+        await handle_balance(update, context)
 
 # Регистрация обработчиков
 bot_app.add_handler(CommandHandler("start", start))
@@ -201,6 +235,7 @@ bot_app.add_handler(CommandHandler("today", handle_today))
 bot_app.add_handler(CommandHandler("month", handle_month))
 bot_app.add_handler(CommandHandler("sync", handle_sync))
 bot_app.add_handler(CommandHandler("setlimit", set_limit_command))
+bot_app.add_handler(CommandHandler("balance", handle_balance))
 
 # Обработка кликов по встроенным (Inline) кнопкам
 bot_app.add_handler(CallbackQueryHandler(callback_handler))
