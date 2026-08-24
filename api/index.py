@@ -69,7 +69,6 @@ async def debug_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(fix_markdown(text), parse_mode="MarkdownV2")
 
 # Не забудьте зарегистрировать:
-# bot_app.add_handler(CommandHandler("debug_accounts", debug_accounts))
 async def handle_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.message:
@@ -252,7 +251,7 @@ bot_app.add_handler(CommandHandler("month", handle_month))
 bot_app.add_handler(CommandHandler("sync", handle_sync))
 bot_app.add_handler(CommandHandler("setlimit", set_limit_command))
 bot_app.add_handler(CommandHandler("balance", handle_balance))
-
+bot_app.add_handler(CommandHandler("debug_accounts", debug_accounts))
 # Обработка кликов по встроенным (Inline) кнопкам
 bot_app.add_handler(CallbackQueryHandler(callback_handler))
 
