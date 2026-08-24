@@ -18,7 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from sync import sync_zenmoney
-from expenses import get_all_today_expenses, get_all_month_expenses, format_expenses, get_all_limits, set_limit
+from expenses import get_all_today_expenses, get_all_month_expenses, format_expenses, get_all_limits, set_limit,get_card_balance
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
