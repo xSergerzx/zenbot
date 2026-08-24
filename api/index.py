@@ -58,6 +58,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Используй кнопки меню или команды:\n"
         "• `/today` — расходы за сегодня\n"
         "• `/month` — расходы за месяц\n"
+        "• `/balance` — баланс карты\n"
         "• `/setlimit [Категория] [День] [Месяц]` — установить лимиты",
         reply_markup=get_main_keyboard(),
         parse_mode="MarkdownV2"
@@ -91,18 +92,21 @@ async def handle_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message:
             await update.message.reply_chat_action("typing")
             
+        month_str = date.today().strftime("%m.%Y")
+            
         with psycopg.connect(DATABASE_URL) as conn:
             init_limits(conn)
             sync_zenmoney(conn)
             expenses = get_all_month_expenses(conn)
-            raw_message = format_expenses(conn, "📊 *РАСХОДЫ ЗА ТЕКУЩИЙ МЕСЯЦ*", expenses, is_monthly=True)
+            
+            title = f"📊 *РАСХОДЫ ЗА МЕСЯЦ ({month_str})*"
+            raw_message = format_expenses(conn, title, expenses, is_monthly=True)
             conn.commit()
             
         await update.message.reply_text(fix_markdown(raw_message), parse_mode="MarkdownV2")
     except Exception as error:
         logger.error(f"Ошибка в month: {error}")
         await update.message.reply_text(f"❌ Ошибка:\n{error}")
-
 
 async def handle_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
