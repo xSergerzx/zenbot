@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request, Response
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 from telegram.helpers import escape_markdown
+from datetime import date
 
 # Добавляем корневую директорию в путь поиска модулей, чтобы импортировать sync и expenses
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -53,26 +54,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard(),
         parse_mode="MarkdownV2"
     )
-async def debug_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает список всех карт пользователю бота."""
-    with psycopg.connect(DATABASE_URL) as conn:
-        sync_zenmoney(conn)
-        conn.commit()
-        with conn.cursor() as cur:
-            cur.execute("SELECT title, balance FROM accounts WHERE deleted = FALSE")
-            rows = cur.fetchall()
-            
-    text = "📋 *Найденные счета:*\n\n"
-    for title, balance in rows:
-        text += f"• `{title}`: {balance:.2f} грн\n"
-        
-    await update.message.reply_text(fix_markdown(text), parse_mode="MarkdownV2")
 
-# Не забудьте зарегистрировать:
 async def handle_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.message:
             await update.message.reply_chat_action("typing")
+
+        today_str = date.today().strftime("%d.%m.%Y")
         
         with psycopg.connect(DATABASE_URL) as conn:
             # Сначала гарантируем, что таблица лимитов создана
@@ -81,12 +69,16 @@ async def handle_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             sync_zenmoney(conn)
             expenses = get_all_today_expenses(conn)
-            raw_message = format_expenses(conn, "📅 *РАСХОДЫ СЕГОДНЯ*", expenses, is_monthly=False)
-            conn.commit()
             
+            # Подставляем дату в заголовок отчета
+            title = f"📅 *РАСХОДЫ СЕГОДНЯ ({today_str})*"
+            raw_message = format_expenses(conn, title, expenses, is_monthly=False)
+            
+            conn.commit()
+
         await update.message.reply_text(fix_markdown(raw_message), parse_mode="MarkdownV2")
     except Exception as error:
-        logger.error(f"Ошибка в today: {error}")
+        logger.error(f"Ошибка при получении расходов за день: {error}")
         await update.message.reply_text(f"❌ Ошибка:\n{error}")
 
 async def handle_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -125,7 +117,6 @@ async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         with psycopg.connect(DATABASE_URL) as conn:
             sync_zenmoney(conn)
-            # Вызываем нашу исправленную функцию
             card_info = get_card_balance(conn)
             conn.commit()
 
@@ -133,7 +124,7 @@ async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bal_fmt = f"{card_info['balance']:,.2f}".replace(",", " ").replace(".", ",")
             raw_message = f"💳 *{card_info['title']}*: {bal_fmt} грн"
         else:
-            raw_message = "❌ Активная карта с балансом не найдена."
+            raw_message = "❌ Карта не найдена. Проверьте параметр ZENMONEY_CARD_NAME в .env"
 
         await update.message.reply_text(fix_markdown(raw_message), parse_mode="MarkdownV2")
     except Exception as error:
