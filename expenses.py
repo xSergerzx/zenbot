@@ -11,6 +11,7 @@ CATEGORIES = {
     "Продукты": os.getenv("ZENMONEY_FOOD_TAG"),
 }
 
+
 def generate_progress_bar(spent, limit):
     """Генерирует визуальный прогресс-бар из 5 делений."""
     if not limit or limit <= 0:
@@ -20,29 +21,25 @@ def generate_progress_bar(spent, limit):
     filled_blocks = min(int(percentage * 5), 5)
     empty_blocks = 5 - filled_blocks
     
-    # Если перерасход — красим в красный, иначе в зелёный
     color_emoji = "🟥" if percentage > 1.0 else "🟩"
-    
     return f"[{color_emoji * filled_blocks}{'⬜' * empty_blocks}]"
+
 
 def format_expenses(conn, title, expenses, is_monthly=False):
     """
     Форматирует словарь расходов в красивое сообщение, 
-    учитывая установленные лимиты и прогресс-бары.
+    учитывая лимиты и прогресс-бары.
     """
     lines = [title, ""]
     emojis = {"Алкоголь": "🍺", "Кофе": "☕", "Продукты": "🛒"}
     total = 0
 
-    # Получаем лимиты для всех категорий
     limits = get_all_limits(conn)
     limit_type = "monthly" if is_monthly else "daily"
 
     for category, amount in expenses.items():
         total += amount
         emoji = emojis.get(category, "💰")
-        
-        # Берем нужный лимит (дневной или месячный)
         cat_limit = limits.get(category, {}).get(limit_type)
 
         if cat_limit:
@@ -58,7 +55,6 @@ def format_expenses(conn, title, expenses, is_monthly=False):
                 
             lines.append(f"{emoji} **{category}**: {amount:.2f} грн {limit_info}\n   {progress_bar}{status_emoji}")
         else:
-            # Если лимит не задан, выводим обычную строку
             lines.append(f"{emoji} **{category}**: {amount:.2f} грн")
 
     lines.extend([
@@ -68,6 +64,7 @@ def format_expenses(conn, title, expenses, is_monthly=False):
     ])
 
     return "\n".join(lines)
+
 
 def init_limits(conn):
     """Инициализация таблицы лимитов в PostgreSQL."""
@@ -80,6 +77,7 @@ def init_limits(conn):
                 updated_at TIMESTAMP WITH TIME ZONE
             )
         """)
+
 
 def get_limit(conn, category_name):
     """Получение лимитов для конкретной категории."""
@@ -95,6 +93,7 @@ def get_limit(conn, category_name):
         return {"daily": None, "monthly": None}
 
     return {"daily": row[0], "monthly": row[1]}
+
 
 def set_limit(conn, category_name, daily_limit=None, monthly_limit=None):
     """Установка лимитов."""
@@ -112,6 +111,7 @@ def set_limit(conn, category_name, daily_limit=None, monthly_limit=None):
                 updated_at = EXCLUDED.updated_at
         """, (category_name, daily_limit, monthly_limit))
 
+
 def get_all_limits(conn):
     """Получение лимитов по всем категориям."""
     result = {}
@@ -119,8 +119,9 @@ def get_all_limits(conn):
         result[category] = get_limit(conn, category)
     return result
 
+
 def get_category_expenses(conn, category_name, start_date=None, end_date=None):
-    """Возвращает сумму расходов по категории за указанный период из PostgreSQL."""
+    """Возвращает сумму расходов по категории из PostgreSQL."""
     tag_id = CATEGORIES.get(category_name)
     if not tag_id:
         return 0
@@ -148,9 +149,11 @@ def get_category_expenses(conn, category_name, start_date=None, end_date=None):
 
     return result[0] or 0
 
+
 def get_today_expenses(conn, category_name):
     today = date.today().isoformat()
     return get_category_expenses(conn, category_name, start_date=today, end_date=today)
+
 
 def get_month_expenses(conn, category_name):
     today = date.today()
@@ -158,8 +161,28 @@ def get_month_expenses(conn, category_name):
     end_date = today.isoformat()
     return get_category_expenses(conn, category_name, start_date=start_date, end_date=end_date)
 
+
 def get_all_today_expenses(conn):
     return {category: get_today_expenses(conn, category) for category in CATEGORIES}
 
+
 def get_all_month_expenses(conn):
     return {category: get_month_expenses(conn, category) for category in CATEGORIES}
+
+
+def get_card_balance(conn, card_title: str = None):
+    """Чистый поиск баланса карты по ее уникальному имени."""
+    target = card_title or os.getenv("ZENMONEY_CARD_NAME", "Monobank")
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT title, balance 
+            FROM accounts 
+            WHERE title ILIKE %s AND deleted = FALSE AND archive = FALSE
+            LIMIT 1
+        """, (f"%{target}%",))
+        row = cur.fetchone()
+
+    if row:
+        return {"title": row[0], "balance": float(row[1])}
+    return None

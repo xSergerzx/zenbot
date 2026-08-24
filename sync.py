@@ -2,7 +2,6 @@ import os
 import time
 import requests
 import psycopg
-from psycopg.rows import tuple_row
 
 
 TOKEN = os.getenv("ZENMONEY_ACCESS_TOKEN")
@@ -12,7 +11,6 @@ API_URL = "https://api.zenmoney.ru/v8/diff/"
 def init_db(conn):
     """Инициализация таблиц в PostgreSQL при необходимости."""
     with conn.cursor() as cur:
-        # В PostgreSQL используем TEXT/VARCHAR, NUMERIC (или DOUBLE PRECISION) и BOOLEAN
         cur.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -30,7 +28,16 @@ def init_db(conn):
                 deleted BOOLEAN DEFAULT FALSE
             )
         """)
-        # Коммит делать не нужно, если соединение управляется контекстным менеджером выше
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS accounts (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                balance DOUBLE PRECISION DEFAULT 0,
+                archive BOOLEAN DEFAULT FALSE,
+                deleted BOOLEAN DEFAULT FALSE
+            )
+        """)
 
 
 def get_server_timestamp(conn):
@@ -50,7 +57,6 @@ def get_server_timestamp(conn):
 def save_server_timestamp(conn, timestamp):
     """Сохранение временной метки."""
     with conn.cursor() as cur:
-        # В PostgreSQL используется синтаксис EXCLUDED (вместо excluded у SQLite)
         cur.execute("""
             INSERT INTO settings (key, value)
             VALUES ('server_timestamp', %s)
@@ -64,10 +70,8 @@ def sync_zenmoney(conn):
     Основная функция синхронизации.
     Принимает активное соединение `conn` от psycopg.
     """
-    # Гарантируем наличие таблиц
     if not TOKEN:
         raise RuntimeError("ZENMONEY_ACCESS_TOKEN не указан в окружении")
-
 
     init_db(conn)
 
@@ -80,7 +84,9 @@ def sync_zenmoney(conn):
     }
 
     if server_timestamp == 0:
-        payload["forceFetch"] = ["tag", "transaction", "user"]
+        payload["forceFetch"] = ["tag", "transaction", "user", "account"]
+    else:
+        payload["forceFetch"] = ["account"]  # Счета обновляем всегда для свежего остатка
 
     headers = {
         "Authorization": f"Bearer {TOKEN}",
@@ -91,6 +97,31 @@ def sync_zenmoney(conn):
     response.raise_for_status()
 
     data = response.json()
+
+    # 1. Синхронизация счетов (Accounts)
+    accounts = data.get("account", [])
+    print(f"Получено счетов: {len(accounts)}")
+
+    with conn.cursor() as cur:
+        for acc in accounts:
+            cur.execute("""
+                INSERT INTO accounts (id, title, balance, archive, deleted)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT(id)
+                DO UPDATE SET
+                    title = EXCLUDED.title,
+                    balance = EXCLUDED.balance,
+                    archive = EXCLUDED.archive,
+                    deleted = EXCLUDED.deleted
+            """, (
+                acc["id"],
+                acc.get("title", "Без названия"),
+                acc.get("balance") or 0,
+                bool(acc.get("archive")),
+                bool(acc.get("deleted"))
+            ))
+
+    # 2. Синхронизация транзакций (Transactions)
     transactions = data.get("transaction", [])
     print(f"Получено транзакций: {len(transactions)}")
 
@@ -99,15 +130,12 @@ def sync_zenmoney(conn):
             transaction_id = transaction["id"]
             transaction_date = transaction.get("date")
             outcome = transaction.get("outcome") or 0
-            
-            # Важно: для PostgreSQL сразу делаем нативный Python bool (True/False)
             deleted = bool(transaction.get("deleted"))
 
             tags = transaction.get("tag") or []
             tag_id = tags[0] if tags else None
             source = transaction.get("source")
 
-            # Меняем плейсхолдеры '?' на '%s' и 'excluded' на 'EXCLUDED'
             cur.execute("""
                 INSERT INTO transactions (
                     id,
@@ -151,7 +179,7 @@ if __name__ == "__main__":
     if not db_url:
         raise RuntimeError("DATABASE_URL не указан в .env")
         
-    print("Локальный запуск синхронизации с Neon...")
+    print("Локальный запуск синхронизации...")
     with psycopg.connect(db_url) as conn:
         sync_zenmoney(conn)
         conn.commit()
