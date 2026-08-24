@@ -53,7 +53,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard(),
         parse_mode="MarkdownV2"
     )
+async def debug_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает список всех карт пользователю бота."""
+    with psycopg.connect(DATABASE_URL) as conn:
+        sync_zenmoney(conn)
+        conn.commit()
+        with conn.cursor() as cur:
+            cur.execute("SELECT title, balance FROM accounts WHERE deleted = FALSE")
+            rows = cur.fetchall()
+            
+    text = "📋 *Найденные счета:*\n\n"
+    for title, balance in rows:
+        text += f"• `{title}`: {balance:.2f} грн\n"
+        
+    await update.message.reply_text(fix_markdown(text), parse_mode="MarkdownV2")
 
+# Не забудьте зарегистрировать:
+# bot_app.add_handler(CommandHandler("debug_accounts", debug_accounts))
 async def handle_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.message:
