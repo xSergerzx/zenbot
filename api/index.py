@@ -74,7 +74,7 @@ def get_main_keyboard():
 
 def fix_markdown(text: str) -> str:
     """Экранирует системные символы для MarkdownV2, не ломая разметку (* и [])."""
-    bad_chars = ['_', '-', '.', '!', '(', ')', '{', '}', '+', '#']
+    bad_chars = ['_', '-', '.', '!', '(', ')', '{', '}', '+', '#', '|']
     for char in bad_chars:
         text = text.replace(char, f"\\{char}")
     return text
