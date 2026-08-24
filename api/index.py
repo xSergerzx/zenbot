@@ -1,15 +1,13 @@
 import os
-import asyncio
-import psycopg
 import sys
 import logging
+from datetime import date
 from fastapi import FastAPI, Request, Response
+import psycopg
+
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
-from telegram.helpers import escape_markdown
-from datetime import date
 
-# Добавляем корневую директорию в путь поиска модулей, чтобы импортировать sync и expenses
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 logging.basicConfig(
@@ -19,7 +17,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from sync import sync_zenmoney
-from expenses import get_all_today_expenses, get_all_month_expenses, format_expenses, get_all_limits, set_limit,get_card_balance
+from expenses import (
+    get_all_today_expenses, 
+    get_all_month_expenses, 
+    format_expenses, 
+    get_all_limits, 
+    set_limit, 
+    get_card_balance, 
+    init_limits
+)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -27,8 +33,9 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 app = FastAPI()
 bot_app = Application.builder().token(TOKEN).build()
 
+
 def get_main_keyboard():
-    """Возвращает постоянную клавиатуру главного меню."""
+    """Постоянная клавиатура главного меню."""
     keyboard = [
         ["📅 Сегодня", "📊 Месяц"],
         ["💳 Баланс", "🔄 Синхронизация"],
@@ -36,17 +43,18 @@ def get_main_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-def fix_markdown(text):
-    """Экранирует системные символы для MarkdownV2, исключая разметку (* и [ ] для бар)."""
-    # Символы, которые PTB требует экранировать в MarkdownV2, если они не являются разметкой
+
+def fix_markdown(text: str) -> str:
+    """Экранирует системные символы для MarkdownV2, не ломая разметку (* и [])."""
     bad_chars = ['_', '-', '.', '!', '(', ')', '{', '}', '+', '#']
     for char in bad_chars:
         text = text.replace(char, f"\\{char}")
     return text
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Привет\! 👋\n\nЯ помогу контролировать расходы из ZenMoney\.\n\n"
+        "Привет\\! 👋\n\nЯ помогу контролировать расходы из ZenMoney\\.\n\n"
         "Используй кнопки меню или команды:\n"
         "• `/today` — расходы за сегодня\n"
         "• `/month` — расходы за месяц\n"
@@ -54,6 +62,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard(),
         parse_mode="MarkdownV2"
     )
+
 
 async def handle_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -63,17 +72,12 @@ async def handle_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
         today_str = date.today().strftime("%d.%m.%Y")
         
         with psycopg.connect(DATABASE_URL) as conn:
-            # Сначала гарантируем, что таблица лимитов создана
-            from expenses import init_limits
             init_limits(conn)
-            
             sync_zenmoney(conn)
             expenses = get_all_today_expenses(conn)
             
-            # Подставляем дату в заголовок отчета
             title = f"📅 *РАСХОДЫ СЕГОДНЯ ({today_str})*"
             raw_message = format_expenses(conn, title, expenses, is_monthly=False)
-            
             conn.commit()
 
         await update.message.reply_text(fix_markdown(raw_message), parse_mode="MarkdownV2")
@@ -81,15 +85,14 @@ async def handle_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка при получении расходов за день: {error}")
         await update.message.reply_text(f"❌ Ошибка:\n{error}")
 
+
 async def handle_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.message:
             await update.message.reply_chat_action("typing")
             
         with psycopg.connect(DATABASE_URL) as conn:
-            from expenses import init_limits
             init_limits(conn)
-            
             sync_zenmoney(conn)
             expenses = get_all_month_expenses(conn)
             raw_message = format_expenses(conn, "📊 *РАСХОДЫ ЗА ТЕКУЩИЙ МЕСЯЦ*", expenses, is_monthly=True)
@@ -100,15 +103,17 @@ async def handle_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка в month: {error}")
         await update.message.reply_text(f"❌ Ошибка:\n{error}")
 
+
 async def handle_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             sync_zenmoney(conn)
             conn.commit()
-        await update.message.reply_text("✅ ZenMoney успешно синхронизирован\.", reply_markup=get_main_keyboard())
+        await update.message.reply_text("✅ ZenMoney успешно синхронизирован\\.", reply_markup=get_main_keyboard())
     except Exception as error:
         logger.error(f"Ошибка при синхронизации: {error}")
         await update.message.reply_text(f"❌ Ошибка синхронизации:\n{error}")
+
 
 async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -131,10 +136,10 @@ async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка при получении баланса: {error}")
         await update.message.reply_text(f"❌ Ошибка:\n{error}")
 
+
 async def handle_limits_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         with psycopg.connect(DATABASE_URL) as conn:
-            from expenses import init_limits
             init_limits(conn)
             limits = get_all_limits(conn)
         
@@ -144,8 +149,7 @@ async def handle_limits_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         for category, data in limits.items():
             daily = f"{data['daily']:.0f} грн" if data['daily'] else "не установлен"
             monthly = f"{data['monthly']:.0f} грн" if data['monthly'] else "не установлен"
-            # Заменяем | на \| для совместимости с MarkdownV2
-            lines.append(f"• *{category}*:\n  День: {daily} \| Месяц: {monthly}")
+            lines.append(f"• *{category}*:\n  День: {daily} | Месяц: {monthly}")
             keyboard.append([InlineKeyboardButton(f"Изменить {category}", callback_data=f"edit_lim:{category}")])
             
         lines.append("\n💡 Чтобы изменить, нажмите кнопку ниже или введите:\n`/setlimit [Категория] [День] [Месяц]`")
@@ -164,7 +168,7 @@ async def set_limit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         args = context.args
         if len(args) < 3:
             await update.message.reply_text(
-                "⚠️ *Неверный формат команды\.*\n\n"
+                "⚠️ *Неверный формат команды\\.*\n\n"
                 "Пиши так:\n`/setlimit [Категория] [Лимит_День] [Лимит_Месяц]`\n\n"
                 "Пример:\n`/setlimit Продукты 300 9000`\n"
                 "_(Используй 0, если лимит не нужен)_",
@@ -177,7 +181,7 @@ async def set_limit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cat_name = valid_categories.get(cat_name)
 
         if not cat_name:
-            await update.message.reply_text("❌ Ошибка: Неизвестная категория\. Доступны: Продукты, Кофе, Алкоголь")
+            await update.message.reply_text("❌ Ошибка: Неизвестная категория\\. Доступны: Продукты, Кофе, Алкоголь")
             return
 
         daily = float(args[1])
@@ -187,19 +191,18 @@ async def set_limit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         monthly_val = None if monthly <= 0 else monthly
 
         with psycopg.connect(DATABASE_URL) as conn:
-            from expenses import init_limits
             init_limits(conn)
             set_limit(conn, cat_name, daily_val, monthly_val)
             conn.commit()
 
-        await update.message.reply_text(f"✅ Лимиты для категории *{cat_name}* успешно сохранены\!", parse_mode="MarkdownV2")
+        await update.message.reply_text(f"✅ Лимиты для категории *{cat_name}* успешно сохранены\\!", parse_mode="MarkdownV2")
     except ValueError:
-        await update.message.reply_text("❌ Ошибка: Лимиты должны быть числами\.")
+        await update.message.reply_text("❌ Ошибка: Лимиты должны быть числами\\.")
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
 
+
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает нажатия на кнопки под сообщениями (Inline)."""
     query = update.callback_query
     await query.answer()
     
@@ -212,8 +215,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="MarkdownV2"
         )
 
+
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Маршрутизатор текстовых нажатий постоянной клавиатуры."""
     text = update.message.text
     if text == "📅 Сегодня":
         await handle_today(update, context)
@@ -226,6 +229,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     elif text == "💳 Баланс":
         await handle_balance(update, context)
 
+
 # Регистрация обработчиков
 bot_app.add_handler(CommandHandler("start", start))
 bot_app.add_handler(CommandHandler("today", handle_today))
@@ -233,12 +237,10 @@ bot_app.add_handler(CommandHandler("month", handle_month))
 bot_app.add_handler(CommandHandler("sync", handle_sync))
 bot_app.add_handler(CommandHandler("setlimit", set_limit_command))
 bot_app.add_handler(CommandHandler("balance", handle_balance))
-bot_app.add_handler(CommandHandler("debug_accounts", debug_accounts))
-# Обработка кликов по встроенным (Inline) кнопкам
-bot_app.add_handler(CallbackQueryHandler(callback_handler))
 
-# Перехват сообщений с Reply-кнопок
+bot_app.add_handler(CallbackQueryHandler(callback_handler))
 bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
+
 
 @app.post("/")
 @app.post("/api/index")
@@ -250,18 +252,22 @@ async def webhook_handler(request: Request):
         data = await request.json()
         update = Update.de_json(data, bot_app.bot)
         
-        async with bot_app:
-            await bot_app.process_update(update)
+        # Исправлено для стабильной работы на Vercel Serverless
+        if not bot_app._initialized:
+            await bot_app.initialize()
             
+        await bot_app.process_update(update)
         return Response(status_code=200)
     except Exception as e:
         logger.error(f"Ошибка обработки webhook: {e}")
         return Response(content=str(e), status_code=500)
 
+
 @app.get("/")
 @app.get("/api/index")
 async def root():
     return {"status": "ok", "bot": "ZenMoney Bot"}
+
 
 @app.get("/health")
 async def health():
