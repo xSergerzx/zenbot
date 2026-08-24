@@ -163,3 +163,23 @@ def get_all_today_expenses(conn):
 
 def get_all_month_expenses(conn):
     return {category: get_month_expenses(conn, category) for category in CATEGORIES}
+
+def get_card_balance(conn, card_title: str = None):
+    """
+    Возвращает словарь с названием и балансом карты.
+    Ищет карту по названию (по умолчанию берет из .env ZENMONEY_CARD_NAME или ищет 'Монобанк').
+    """
+    target = card_title or os.getenv("ZENMONEY_CARD_NAME", "Монобанк")
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT title, balance 
+            FROM accounts 
+            WHERE title ILIKE %s AND deleted = FALSE AND archive = FALSE
+            LIMIT 1
+        """, (f"%{target}%",))
+        row = cur.fetchone()
+
+    if row:
+        return {"title": row[0], "balance": float(row[1])}
+    return None
