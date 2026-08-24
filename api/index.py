@@ -124,30 +124,21 @@ async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_chat_action("typing")
 
         with psycopg.connect(DATABASE_URL) as conn:
-            # Синхронизируемся с ZenMoney
             sync_zenmoney(conn)
-            
-            # Вкажите название нужной карты как в ZenMoney
-            CARD_NAME = "Монобанк"  
-            card_data = get_card_balance(conn, CARD_NAME)
+            # Вызываем нашу исправленную функцию
+            card_info = get_card_balance(conn)
             conn.commit()
 
-        if card_data:
-            # Форматируем красивое число (например: 12 450.00 грн)
-            formatted_sum = f"{card_data['balance']:,.2f}".replace(",", " ").replace(".", ",")
-            raw_message = (
-                f"💳 *БАЛАНС КАРТЫ*\n\n"
-                f"Карта: *{card_data['title']}*\n"
-                f"Остаток: *{formatted_sum} {card_data['currency']}*"
-            )
+        if card_info:
+            bal_fmt = f"{card_info['balance']:,.2f}".replace(",", " ").replace(".", ",")
+            raw_message = f"💳 *{card_info['title']}*: {bal_fmt} грн"
         else:
-            raw_message = f"❌ Карта с названием *{CARD_NAME}* не найдена\."
+            raw_message = "❌ Активная карта с балансом не найдена."
 
         await update.message.reply_text(fix_markdown(raw_message), parse_mode="MarkdownV2")
-
     except Exception as error:
-        logger.error(f"Ошибка при вычислении баланса: {error}")
-        await update.message.reply_text(f"❌ Ошибка при получении баланса:\n{error}")
+        logger.error(f"Ошибка при получении баланса: {error}")
+        await update.message.reply_text(f"❌ Ошибка:\n{error}")
 
 async def handle_limits_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
